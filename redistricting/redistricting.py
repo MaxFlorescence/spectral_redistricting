@@ -497,7 +497,7 @@ class Redistricting:
             description: str|None = None,
             checkpoint_interval: int = 0,
             checkpoint_dest: str = 'checkpoint.json',
-            keep_final_step: 'Callable[[dict[str, Any]], bool]|None' = None) -> None:
+            keep_final_step: 'Callable[[dict[str, Any]], bool]|bool|None' = None) -> None:
         '''
             Runs the Redistricting Chain.
             
@@ -535,7 +535,10 @@ class Redistricting:
         self.output_level = output_level
         self.plot_interval = plot_interval
         self.checkpoint_interval = checkpoint_interval
-        self.keep_final_step = keep_final_step
+        if isinstance(keep_final_step, bool):
+            self.keep_final_step = lambda _: keep_final_step
+        else:
+            self.keep_final_step = keep_final_step
         
         self.step_offset = self.instance_data['checkpoint']['constructor']['steps'] - self.steps
         if self.print_progress and self.step_offset > 0:

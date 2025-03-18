@@ -1,6 +1,6 @@
 from redistricting import Redistricting
 
-checkpoint_file = "./output/demo_checkpoint.json"
+checkpoint_file = "demo_checkpoint.json"
 unfinished, r = Redistricting.from_checkpoint(checkpoint_file)
     
 if unfinished:
@@ -8,16 +8,16 @@ if unfinished:
         # no checkpoint was found, so create the redistricting instance for the first time
         r = Redistricting(
             graph = "grid",                             # graph to redistrict
-            k = 10,                                     # number of districts
+            k = 7,                                      # number of districts
             assignment = "row",                         # initial district assignment
-            proposal = "revrecom",                      # proposal function for individual redistricting steps
-            steps = 1000,                               # number of steps to run the chain for
+            proposal = "specrecom",                     # proposal function for individual redistricting steps
+            steps = 400,                                # number of steps to run the chain for
             step_updaters = ["cut edges"],              # statistics to collect after each step
             single_updaters = ["population deviation"], # statistics to collect at the start and at the end
             population_key = "pop",                     # key under which each node's population is stored
-            h = 10,                                     # height of the graph (for grid and triangular graphs)
-            w = 10,                                     # width of the graph (for grid and triangular graphs)
-            graph_name = "10x10 grid graph",            # human-readable name of the graph
+            h = 56,                                     # height of the graph (for grid and triangular graphs)
+            w = 56,                                     # width of the graph (for grid and triangular graphs)
+            graph_name = "56x56 grid graph",            # human-readable name of the graph
             assignment_name = "horizontal stripes"      # human-readable name of the assignment
         )
         
