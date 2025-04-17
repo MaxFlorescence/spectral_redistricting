@@ -13,6 +13,9 @@ type_map = {
     "<class 'tuple'>": lambda s: tuple(s[1:-1].replace(' ', '').split(','))
 }
 
+class RedistrictingException(Exception):
+    pass
+
 def clear_graph_caches():
     grid_graph.cache_clear()
     triangular_graph.cache_clear()
@@ -85,8 +88,8 @@ def grid_graph(n: int, m: int) -> tuple[nx.Graph, float]:
         labels[v] = i_str
         
     nx.relabel_nodes(graph, labels, copy=False)
-    nx.set_node_attributes(graph, positions, 'pos')
-    nx.set_node_attributes(graph, 1, 'pop')
+    nx.set_node_attributes(graph, values=positions, name='pos')
+    nx.set_node_attributes(graph, values=1, name='pop')
     
     size = 140 # TODO: calculate automatically
     return graph, size
@@ -103,7 +106,7 @@ def triangular_graph(n: int, m: int) -> tuple[nx.Graph, float]:
     labels = {v:str(i) for i,v in enumerate(graph.nodes)}
     
     nx.relabel_nodes(graph, labels, copy=False)
-    nx.set_node_attributes(graph, 1, 'pop')
+    nx.set_node_attributes(graph, values=1, name='pop')
     
     size = 125 # TODO: calculate automatically
     return graph, size
