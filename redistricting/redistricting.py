@@ -198,18 +198,28 @@ class Redistricting:
             proposal = 'identity'
         
         # the rest of the initialization
-        self.__init_names(graph_name, graph, h, w, assignment_name, assignment, proposal)
+        self.graph_name, self.assignment_name = self.__init_names(
+            graph_name, graph, h, w, assignment_name, assignment
+        )
+        self.proposal_name = proposal
         
-        self.k = k
-        self.__init_graph(graph, population_key, h, w)
+        self.k = max(k, 1)
+        # graph initialization
+        self.graph, self.graph_is_custom = self.__load_graph(graph, h, w)
+        self.nodelist, self.N, self.target_size = self.__init_graph_meta()
+        self.total_population, self.target_population = self.__set_populations(population_key)
         
         # population updater is required
         self.step_updaters = self.__init_updaters(step_updaters) | {"population": Tally("pop")}
         self.single_updaters = self.__init_updaters(single_updaters)
         
         self.steps = max(steps, 1)
-        self.__init_chain(assignment, proposal)
-        
+        self.assignment = self.__init_assignment(assignment)
+        partition, self.chain = self.__init_chain(proposal)
+        self.near_target_population = within_percent_of_ideal_population(
+            partition, 0.1
+        )
+
         self.__store_runtime_data()
         
     def __init_names(self,
@@ -218,64 +228,44 @@ class Redistricting:
                        h: int,
                        w: int,
                        assignment_name: str|None,
-                       assignment: dict[Any, int]|str,
-                       proposal: str) -> None:
+                       assignment: dict[Any, int]|str) -> tuple[str, str]:
         '''
-            Determine what graph_name/assignment_name should be if it's None. Sets the instance
-            variables:
-            - self.graph_name
-            - self.assignment_name
-            - self.proposal_name
+            Determine what graph_name/assignment_name should be if it's None.
         '''
         if graph_name is None:
             if graph in ['grid', 'triangular']:
-                self.graph_name = f'{h}x{w} {graph}'
+                graph_name = f'{h}x{w} {graph}'
             elif isinstance(graph, str):
-                self.graph_name = graph
+                graph_name = graph
             else:
-                self.graph_name = 'custom'
-        else:
-            self.graph_name = graph_name
+                graph_name = 'custom'
             
-        self.instance_data['checkpoint']['constructor']['graph_name'] = self.graph_name
+        self.instance_data['checkpoint']['constructor']['graph_name'] = graph_name
             
         if assignment_name is None:
             if isinstance(assignment, str):
-                self.assignment_name = assignment
+                assignment_name = assignment
             else:
-                self.assignment_name = 'custom'
-        else:
-            self.assignment_name = assignment_name
+                assignment_name = 'custom'
             
-        self.instance_data['checkpoint']['constructor']['assignment_name'] = self.assignment_name
+        self.instance_data['checkpoint']['constructor']['assignment_name'] = assignment_name
             
-        self.proposal_name = proposal
-
-    def __init_graph(self,
-                     graph: nx.Graph|str,
-                     population_key: str|None,
-                     h: int,
-                     w: int) -> None:
+        return graph_name, assignment_name
+    
+    def __init_graph_meta(self) -> tuple[list[Any], int, float]:
         '''
-            Initialize the graph and its nodes, and set the instance variables:
-            - self.graph
-            - self.graph_is_custom
-            - self.nodelist
-            - self.N
-            - self.target_size
-        '''
-        self.graph, self.graph_is_custom = self.__load_graph(graph, h, w)
+            Initialize the graph metadata.
+        '''        
+        nodelist = list(self.graph.nodes)
+        N = len(nodelist)
+        target_size = N / self.k
         
-        self.nodelist = list(self.graph.nodes)
-        self.N = len(self.nodelist)
-        self.target_size = self.N / self.k
-        
-        node_type = str(type(self.nodelist[0]))
+        node_type = str(type(nodelist[0]))
         if node_type not in utils.type_map:
             print(f'Warning: nodes of type "{node_type}" are not supported by checkpointing.')
         self.instance_data['checkpoint']['node_type'] = node_type
-        
-        self.__set_populations(self.graph, population_key)
+
+        return nodelist, N, target_size
     
     def __load_graph(self,
                      graph: nx.Graph|str,
@@ -302,38 +292,37 @@ class Redistricting:
             elif os.path.exists(graph):
                 graph = utils.graph_from_file(graph)
             else:
-                raise Exception(f'The graph "{graph}" doesn\'t exist!')
+                raise utils.RedistrictingException(f'The graph "{graph}" doesn\'t exist!')
             
         return graph, is_custom
     
-    def __set_populations(self,
-                          graph: nx.Graph,
-                          population_key: str|None) -> None:
+    def __set_populations(self, population_key: str|None) -> tuple[int, float]:
         '''
-            Make sure the graph's nodes each have a 'pop' attribute, and set the instance variables:
-            - self.total_population
-            - self.target_population
+            Make sure the graph's nodes each have a 'pop' attribute.
         '''
-        self.total_population = self.N
+        total_population = self.N
         
         if self.graph_is_custom:
-            self.total_population = 0
+            total_population = 0
             
-            for n in graph.nodes:
+            for n in self.graph.nodes:
                 if population_key is None:
-                    graph.nodes[n]['pop'] = 1
+                    self.graph.nodes[n]['pop'] = 1
                 elif population_key != 'pop':
-                    graph.nodes[n]['pop'] = graph.nodes[n][population_key]
-                elif 'pop' not in graph.nodes[n]: # and population_key == 'pop'
-                    graph.nodes[n]['pop'] = 1
+                    self.graph.nodes[n]['pop'] = self.graph.nodes[n][population_key]
+                elif 'pop' not in self.graph.nodes[n]: # and population_key == 'pop'
+                    self.graph.nodes[n]['pop'] = 1
                     
-                node_pop = graph.nodes[n]['pop']
+                node_pop = self.graph.nodes[n]['pop']
                 
-                assert isinstance(node_pop, int), f'population_key attribute "{population_key}" of node "{n}" must be an integer!'
+                if not isinstance(node_pop, int):
+                    raise utils.RedistrictingException(
+                        f'Population attribute "{population_key}" of node "{n}" must be an integer!'
+                    )
                 
-                self.total_population += node_pop
+                total_population += node_pop
         
-        self.target_population = self.total_population / self.k
+        return total_population, total_population/self.k
     
     def __init_updaters(self,
                         updaters: dict[str, Callable[[Partition], Any]]|list[str]) -> dict[str, Callable[[Partition], Any]]:
@@ -341,33 +330,28 @@ class Redistricting:
             Create a dictionary of updater functions if updaters is a list of strings.
         '''
         if isinstance(updaters, list):
-            return {name: metrics.get_updater(name, self.target_size, self.target_population) for name in updaters}
+            return {
+                name: metrics.get_updater(name, self.target_size, self.target_population)
+                for name in updaters
+            }
         else:
             return updaters
         
     def __init_chain(self,
-                     assignment: dict[Any, int]|str,
-                     proposal: str) -> None:
+                     proposal: str) -> tuple[Partition, MarkovChain]:
         '''
-            Initialize the assignment, partition, and markov chain. Also set the instance variables:
-            - self.assignment
-            - self.near_target_population
-            - self.chain
-        '''
-        self.assignment: dict[Any, int] = self.__init_assignment(assignment)
-        
+            Initialize the assignment, partition, and markov chain.
+        '''        
         partition = Partition(
             graph = self.graph,
             assignment = self.assignment,
             updaters = self.step_updaters
         )
         
-        self.near_target_population = within_percent_of_ideal_population(partition, 0.1)
-        
-        # constraints seem to cause lots of rejections...
+        # TODO: constraints seem to cause lots of rejections...
         ignore_constraints = True
         
-        self.chain = MarkovChain(
+        chain = MarkovChain(
             proposal = self.__init_proposal(proposal),
             constraints = Validator([] if ignore_constraints else [
                 self.near_target_population,
@@ -377,9 +361,11 @@ class Redistricting:
             initial_state = partition,
             total_steps = self.steps + 1 # counter-intuitively, the initial state counts as a step
         )
+
+        return partition, chain
         
     def __init_assignment(self,
-                          assignment: dict[str, int]|str) -> dict:
+                          assignment: dict[str, int]|str) -> dict[Any, int]:
         '''
             Create an assignment mapping nodes to district IDs if assignment is a string.
         '''
@@ -392,7 +378,8 @@ class Redistricting:
                 self.nodelist, self.k, lambda n: self.graph.nodes[n]['pos'][0]
             )
         elif assignment == "none":
-            assert self.k == 1, "Cannot have a none assignment if k is greater than 1!"
+            if self.k != 1:
+                raise utils.RedistrictingException("Cannot have a none assignment if k is not 1!")
             assignment = {n: 1 for n in self.nodelist}
         elif isinstance(assignment, str):
             assignment = nx.get_node_attributes(self.graph, assignment) # Trust the user
@@ -444,7 +431,7 @@ class Redistricting:
                 threshold = "brute force"
             )
         else:
-            raise Exception(f'Unknown proposal "{proposal}"!')
+            raise utils.RedistrictingException(f'Unknown proposal "{proposal}"!')
         
         return proposal_fn
     
@@ -483,7 +470,7 @@ class Redistricting:
         partition_type = 'last_partition' if is_final else 'first_partition'
         
         if partition is None:
-            raise Exception(f"Cannot collect data on None {partition_type}!")
+            raise utils.RedistrictingException(f"Cannot collect data on None {partition_type}!")
         
         self.instance_data['runtime'][partition_type] = {
             name: updater(partition) for name,updater in self.single_updaters.items()
@@ -671,7 +658,8 @@ class Redistricting:
         }
         
         for i, partition in enumerate(self.chain):
-            assert partition is not None, f"None partition at step {i+self.step_offset}!"
+            if partition is None:
+                raise utils.RedistrictingException(f"None partition at step {i+self.step_offset}!")
             
             self.__try_checkpointing(i + self.step_offset, partition)
             
