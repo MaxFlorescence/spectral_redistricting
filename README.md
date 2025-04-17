@@ -7,7 +7,7 @@ facilitate running redistricting chains.
 Run the following commands to install the required packages using
 [Anaconda](https://www.anaconda.com/products/individual#Downloads):
 ```bash
-$ conda create -n redist -c conda-forge -y pip=24.0 ipykernel=6.29.3 geopandas=0.14.3 networkx=3.2.1 mapclassify=2.6.1 matplotlib=3.8.3 tqdm=4.66.2 scipy=1.12.0 numpy=1.26.4 ipywidgets=8.1.2
+$ conda create -n redist -c conda-forge -y pip=24.0 geopandas=0.14.3 networkx=3.2.1 mapclassify=2.6.1 matplotlib=3.8.3 tqdm=4.66.2 scipy=1.12.0 numpy=1.26.4
 $ conda activate redist
 $ pip install gerrychain==0.3.1
 ```
