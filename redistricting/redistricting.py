@@ -353,6 +353,7 @@ class Redistricting:
             updater_dict = {}
 
             for name in updaters:
+                name = name.replace(' ', '_')
                 if name not in metrics.available_updaters:
                     raise utils.RedistrictingException(f'"{name}" is not a known updater!')
                 updater_dict[name] = getattr(self.metrics, name)

@@ -12,7 +12,7 @@ if unfinished:
             assignment = "row",                         # initial district assignment
             proposal = "specrecom",                     # proposal function for individual redistricting steps
             steps = 400,                                # number of steps to run the chain for
-            step_updaters = ["cut edges"],              # statistics to collect after each step
+            step_updaters = ["cut edge count"],         # statistics to collect after each step
             single_updaters = ["population deviation"], # statistics to collect at the start and at the end
             population_key = "pop",                     # key under which each node's population is stored
             h = 56,                                     # height of the graph (for grid and triangular graphs)

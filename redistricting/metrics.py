@@ -1,13 +1,20 @@
 '''Module providing updater methods for collecting partition metrics.'''
 
-from functools import lru_cache
+from typing import Any
+from functools import lru_cache, partial
 import inspect
 
 import networkx as nx
 import numpy as np
 
 from gerrychain.partition import Partition
-from gerrychain.updaters import cut_edges, Tally
+from gerrychain.updaters import cut_edges
+
+def tally_population(part: Any, partition: Partition) -> float:
+    '''
+    Compute the population of one `part` in the `partition`.
+    '''
+    return sum(partition.graph.nodes[n]['pop'] for n in part)
 
 class Metrics:
     '''
@@ -27,7 +34,7 @@ class Metrics:
         max_part, min_part = None, None
 
         for part in partition.parts.values():
-            size = len(part) if not use_population else Tally('pop')(part)
+            size = len(part) if not use_population else tally_population(part, partition)
 
             if max_part is None or max_part < size:
                 max_part = size
@@ -36,6 +43,12 @@ class Metrics:
 
         assert max_part is not None and min_part is not None
         return max_part, min_part
+
+    def cut_edges(self, partition: Partition) -> list[tuple]:
+        '''
+        Just calls `gerrychain.updaters.cut_edges` but returns a list instead of a set.
+        '''
+        return list(cut_edges(partition))
 
     def cut_edge_count(self, partition: Partition) -> int:
         '''
@@ -112,7 +125,7 @@ class Metrics:
         '''
         Returns a list of each district's size.
         '''
-        size = Tally('pop') if use_population else len
+        size = partial(tally_population, partition=partition) if use_population else len
         return [size(p) for p in partition.parts.values()]
 
     def __producing_spanning_trees(self, partition: Partition, log: bool) -> float|int:
