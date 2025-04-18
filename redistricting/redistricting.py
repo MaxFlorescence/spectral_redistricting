@@ -1,14 +1,20 @@
-import os, json, time
+'''Module providing a class for running GerryChain redistricting chains.'''
+
+import os
+import json
+import time
+from functools import partial
+
 import networkx as nx
-from typing import Any, Literal, Callable
-from redistricting.proposals import (spectral_kmeans, spectral_recom)
-from redistricting import (metrics, utils)
 from gerrychain import MarkovChain
 from gerrychain.accept import always_accept
 from gerrychain.constraints import (Validator, within_percent_of_ideal_population)
 from gerrychain.partition import Partition
 from gerrychain.proposals import recom, reversible_recom
 from gerrychain.updaters import Tally
+
+from redistricting.proposals import (spectral_kmeans, spectral_recom)
+from redistricting import (metrics, utils)
 
 class Redistricting:
     '''
@@ -66,39 +72,37 @@ class Redistricting:
         '''
         if json_file[-5:] != '.json':
             json_file += '.json'
-        
+
         json_file = os.path.abspath(json_file)
         if not os.path.exists(json_file):
             return True, None
-        
+
         with open(json_file, 'r') as f:
             data = json.load(f)
             if 'finished' in data and data['finished']:
                 return False, None
-            
+
             node_type = utils.type_map[data['node_type']]
-            
+
             new_constructor_data = data['constructor'].copy()
             new_constructor_data['steps'] = data['steps']
             new_constructor_data['assignment'] = data['assignment'] if node_type == str else {
                 node_type(n): d
                 for n,d in data['assignment'].items()
             }
-            
+
             r = Redistricting(**new_constructor_data)
-            r.__set_constructor_data(data['constructor'])
+            r.set_constructor_data(data['constructor'])
             return True, r
-    
+
     def __init__(self,
-                 graph: nx.Graph|Literal['grid', 'triangular']|str,
+                 graph: nx.Graph|utils.GraphName,
                  k: int,
-                 assignment: dict[str, int]|Literal['row', 'col']|str,
-                 proposal: Literal[
-                     'identity', 'recom', 'revrecom', 'specrecom', 'bspecrecom', 'speckmeans'
-                 ],
+                 assignment: utils.Assignment|utils.AssignmentName,
+                 proposal: utils.ProposalName,
                  steps: int,
-                 step_updaters: dict[str, Callable[[Partition], Any]]|list[str] = [],
-                 single_updaters: dict[str, Callable[[Partition], Any]]|list[str] = [],
+                 step_updaters: utils.Updaters|utils.UpdaterNames|None = None,
+                 single_updaters: utils.Updaters|utils.UpdaterNames|None = None,
                  population_key: str|None = 'pop',
                  h: int = 0,
                  w: int = 0,
@@ -169,6 +173,11 @@ class Redistricting:
             r.run()
             ```
         '''
+        if step_updaters is None:
+            step_updaters = []
+        if single_updaters is None:
+            single_updaters = []
+
         # store data for checkpointing
         self.instance_data = {
             'checkpoint': {
@@ -193,26 +202,26 @@ class Redistricting:
             self.instance_data['checkpoint']['constructor']['step_updaters'] = step_updaters
         if not isinstance(single_updaters, dict):
             self.instance_data['checkpoint']['constructor']['single_updaters'] = single_updaters
-            
+
         if steps == 0:
             proposal = 'identity'
-        
+
         # the rest of the initialization
         self.graph_name, self.assignment_name = self.__init_names(
             graph_name, graph, h, w, assignment_name, assignment
         )
         self.proposal_name = proposal
-        
+
         self.k = max(k, 1)
         # graph initialization
         self.graph, self.graph_is_custom = self.__load_graph(graph, h, w)
-        self.nodelist, self.N, self.target_size = self.__init_graph_meta()
+        self.nodelist, self.node_count, self.target_size = self.__init_graph_meta()
         self.total_population, self.target_population = self.__set_populations(population_key)
-        
+
         # population updater is required
         self.step_updaters = self.__init_updaters(step_updaters) | {"population": Tally("pop")}
         self.single_updaters = self.__init_updaters(single_updaters)
-        
+
         self.steps = max(steps, 1)
         self.assignment = self.__init_assignment(assignment)
         partition, self.chain = self.__init_chain(proposal)
@@ -221,14 +230,25 @@ class Redistricting:
         )
 
         self.__store_runtime_data()
-        
+
+        self.output_level = None
+        self.plot_interval = None
+        self.checkpoint_interval = None
+        self.keep_final_step = None
+        self.step_offset = None
+        self.output_path = None
+        self.checkpoint_path = None
+        self.save_data = None
+        self.display_data = None
+        self.print_progress = None
+
     def __init_names(self,
                        graph_name: str|None,
                        graph: nx.Graph|str,
                        h: int,
                        w: int,
                        assignment_name: str|None,
-                       assignment: dict[Any, int]|str) -> tuple[str, str]:
+                       assignment: utils.Assignment|str) -> tuple[str, str]:
         '''
             Determine what graph_name/assignment_name should be if it's None.
         '''
@@ -239,36 +259,36 @@ class Redistricting:
                 graph_name = graph
             else:
                 graph_name = 'custom'
-            
+
         self.instance_data['checkpoint']['constructor']['graph_name'] = graph_name
-            
+
         if assignment_name is None:
             if isinstance(assignment, str):
                 assignment_name = assignment
             else:
                 assignment_name = 'custom'
-            
+
         self.instance_data['checkpoint']['constructor']['assignment_name'] = assignment_name
-            
+
         return graph_name, assignment_name
-    
-    def __init_graph_meta(self) -> tuple[list[Any], int, float]:
+
+    def __init_graph_meta(self) -> tuple[list[utils.Node], int, float]:
         '''
             Initialize the graph metadata.
-        '''        
+        '''
         nodelist = list(self.graph.nodes)
-        N = len(nodelist)
-        target_size = N / self.k
-        
+        node_count = len(nodelist)
+        target_size = node_count / self.k
+
         node_type = str(type(nodelist[0]))
         if node_type not in utils.type_map:
             print(f'Warning: nodes of type "{node_type}" are not supported by checkpointing.')
         self.instance_data['checkpoint']['node_type'] = node_type
 
-        return nodelist, N, target_size
-    
+        return nodelist, node_count, target_size
+
     def __load_graph(self,
-                     graph: nx.Graph|str,
+                     graph: nx.Graph|utils.GraphName,
                      h: int,
                      w: int) -> tuple[nx.Graph, bool]:
         '''
@@ -279,7 +299,7 @@ class Redistricting:
         self.node_size = 0
         self.node_shape = ''
         is_custom = True
-        
+
         if isinstance(graph, str):
             if graph == 'grid':
                 graph, self.node_size = utils.grid_graph(h, w)
@@ -293,18 +313,18 @@ class Redistricting:
                 graph = utils.graph_from_file(graph)
             else:
                 raise utils.RedistrictingException(f'The graph "{graph}" doesn\'t exist!')
-            
+
         return graph, is_custom
-    
+
     def __set_populations(self, population_key: str|None) -> tuple[int, float]:
         '''
             Make sure the graph's nodes each have a 'pop' attribute.
         '''
-        total_population = self.N
-        
+        total_population = self.node_count
+
         if self.graph_is_custom:
             total_population = 0
-            
+
             for n in self.graph.nodes:
                 if population_key is None:
                     self.graph.nodes[n]['pop'] = 1
@@ -312,20 +332,19 @@ class Redistricting:
                     self.graph.nodes[n]['pop'] = self.graph.nodes[n][population_key]
                 elif 'pop' not in self.graph.nodes[n]: # and population_key == 'pop'
                     self.graph.nodes[n]['pop'] = 1
-                    
+
                 node_pop = self.graph.nodes[n]['pop']
-                
+
                 if not isinstance(node_pop, int):
                     raise utils.RedistrictingException(
                         f'Population attribute "{population_key}" of node "{n}" must be an integer!'
                     )
-                
+
                 total_population += node_pop
-        
+
         return total_population, total_population/self.k
-    
-    def __init_updaters(self,
-                        updaters: dict[str, Callable[[Partition], Any]]|list[str]) -> dict[str, Callable[[Partition], Any]]:
+
+    def __init_updaters(self, updaters: utils.Updaters|utils.UpdaterNames) -> utils.Updaters:
         '''
             Create a dictionary of updater functions if updaters is a list of strings.
         '''
@@ -336,21 +355,20 @@ class Redistricting:
             }
         else:
             return updaters
-        
-    def __init_chain(self,
-                     proposal: str) -> tuple[Partition, MarkovChain]:
+
+    def __init_chain(self, proposal: str) -> tuple[Partition, MarkovChain]:
         '''
             Initialize the assignment, partition, and markov chain.
-        '''        
+        '''
         partition = Partition(
             graph = self.graph,
             assignment = self.assignment,
             updaters = self.step_updaters
         )
-        
+
         # TODO: constraints seem to cause lots of rejections...
         ignore_constraints = True
-        
+
         chain = MarkovChain(
             proposal = self.__init_proposal(proposal),
             constraints = Validator([] if ignore_constraints else [
@@ -363,9 +381,9 @@ class Redistricting:
         )
 
         return partition, chain
-        
+
     def __init_assignment(self,
-                          assignment: dict[str, int]|str) -> dict[Any, int]:
+                          assignment: utils.Assignment|utils.AssignmentName) -> utils.Assignment:
         '''
             Create an assignment mapping nodes to district IDs if assignment is a string.
         '''
@@ -384,31 +402,28 @@ class Redistricting:
         elif isinstance(assignment, str):
             assignment = nx.get_node_attributes(self.graph, assignment) # Trust the user
             assert isinstance(assignment, dict)
-            
+
         return assignment
-    
+
     def __init_proposal(self,
-                        proposal: str) -> Callable[[Partition], Partition]:
+                        proposal: utils.ProposalName) -> utils.Proposal:
         '''
             Creates the proposal function if proposal is a string. Also sets self.steps to 2 if
             necessary.
         '''
         proposal = proposal.lower()
-        
+
         if proposal == "identity":
-            proposal_fn = lambda p: p
+            proposal_fn = utils.identity
             self.steps = 1
         elif proposal == 'recom':
-            proposal_fn = lambda p: recom(
-                partition = p,
+            proposal_fn = partial(recom,
                 pop_col = 'pop',
                 pop_target = self.target_population,
-                epsilon = 0.05,
-                region_surcharge = None
+                epsilon = 0.05
             )
         elif proposal == "revrecom":
-            proposal_fn = lambda p: reversible_recom(
-                partition = p,
+            proposal_fn = partial(reversible_recom,
                 pop_col = 'pop',
                 pop_target = self.target_population,
                 repeat_until_valid = True,
@@ -416,75 +431,58 @@ class Redistricting:
                 M = 30          # Graph Partitions", table 1
             )
         elif proposal == "speckmeans":
-            proposal_fn = lambda p: spectral_kmeans(
-                partition = p,
+            proposal_fn = partial(spectral_kmeans,
                 G = self.graph,
                 k = self.k,
                 nodelist = self.nodelist
             )
             self.steps = 1
-        elif proposal == "specrecom": 
+        elif proposal == "specrecom":
             proposal_fn = spectral_recom
         elif proposal == "balspecrecom":
-            proposal_fn = lambda p: spectral_recom(
-                partition = p,
+            proposal_fn = partial(spectral_recom,
                 threshold = "brute force"
             )
         else:
             raise utils.RedistrictingException(f'Unknown proposal "{proposal}"!')
-        
+
         return proposal_fn
-    
-    def __set_constructor_data(self,
-                           constructor_data: dict[str, Any]) -> None:
+
+    def set_constructor_data(self,
+                           constructor_data: utils.Metadata) -> None:
         '''
             Overwrites the constructor data in the instance_data dictionary.
         '''
         self.instance_data['checkpoint']['constructor'] = constructor_data
-        
+
     def __store_runtime_data(self) -> None:
         '''
             Stores data generated after construction into the instance_data dictionary.
         '''
         self.instance_data['runtime'] = {
             'graph_is_custom': self.graph_is_custom,
-            'N': self.N,
+            'node_count': self.node_count,
             'edges': len(self.graph.edges),
             'total_population': self.total_population
         }
-        
-        if self.steps != self.instance_data['checkpoint']['constructor']['steps']:
-            self.instance_data['runtime']['steps'] = self.steps
-        if self.graph_name != self.instance_data['checkpoint']['constructor']['graph_name']:
-            self.instance_data['runtime']['graph_name'] = self.graph_name
-        if self.assignment_name != self.instance_data['checkpoint']['constructor']['assignment_name']:
-            self.instance_data['runtime']['assignment_name'] = self.assignment_name
-    
-    def __collect_single_updaters(self,
-                                  partition: Partition|None,
-                                  is_final: bool = True) -> None:
-        '''
-            Adds data generated by applying the single updaters to the partition to the
-            instance_data dictionary.
-        '''
-        partition_type = 'last_partition' if is_final else 'first_partition'
-        
-        if partition is None:
-            raise utils.RedistrictingException(f"Cannot collect data on None {partition_type}!")
-        
-        self.instance_data['runtime'][partition_type] = {
-            name: updater(partition) for name,updater in self.single_updaters.items()
-        }
-        
+
+        for name, val in [
+            ('steps', self.steps),
+            ('graph_name', self.graph_name),
+            ('assignment_name', self.assignment_name)
+        ]:
+            if val != self.instance_data['checkpoint']['constructor'][name]:
+                self.instance_data['runtime'][name] = val
+
     def run(self,
             plot_interval: int = 1,
-            interactive_level: Literal['script', 'progress', 'user', 'full'] = 'script',
-            output_level: Literal['minimal', 'less', 'all'] = 'all',
+            interactive_level: utils.InteractiveLevel = 'script',
+            output_level: utils.OutputLevel = 'all',
             output_parent: str = '.',
             description: str|None = None,
             checkpoint_interval: int = 0,
             checkpoint_dest: str = 'checkpoint.json',
-            keep_final_step: 'Callable[[dict[str, Any]], bool]|bool|None' = None) -> None:
+            keep_final_step: 'utils.MetadataChecker|bool|None' = None) -> None:
         '''
             Runs the Redistricting Chain.
             
@@ -526,68 +524,68 @@ class Redistricting:
             self.keep_final_step = lambda _: keep_final_step
         else:
             self.keep_final_step = keep_final_step
-        
+
         self.step_offset = self.instance_data['checkpoint']['constructor']['steps'] - self.steps
         if self.print_progress and self.step_offset > 0:
             print('Resuming from checkpoint.')
-        
+
         description = self.__create_description(description)
         self.output_path, self.checkpoint_path = self.__setup_output_dirs(
             output_parent, description, checkpoint_dest
         )
-        
+
         if self.print_progress:
             print(f'Running "{description}"...')
-        
+
         self.instance_data['runtime']['time_elapsed'] = -time.time()
         initial_partition, final_partition = self.__run_the_chain()
         self.instance_data['runtime']['time_elapsed'] += time.time()
-        
+
         if self.print_progress:
             print()
-        
+
         run_data = self.__output_run_data(initial_partition, final_partition)
-        
+
         if os.path.exists(self.checkpoint_path):
             with open(self.checkpoint_path, 'r+') as f:
                 output = {"finished": True}
-                
+
                 if self.keep_final_step is not None and self.keep_final_step(run_data):
                     # copy over existing checkpoint data
                     output.update(json.load(f))
-                
+
                 f.seek(0)
-                f.truncate()    
+                f.truncate()
                 json.dump(output, f)
-    
+
     def __create_description(self, description: str|None) -> str:
         '''
             Create a string to refer to this run by.
         '''
         self.instance_data['runtime']['description'] = description
-        
-        info = '{}_{}_{}_{}'.format(
+
+        info = '_'.join([
             self.graph_name,
-            self.k,
+            str(self.k),
             self.proposal_name,
             self.instance_data['checkpoint']['constructor']['assignment_name']
-        )
-        
+        ])
+
         if description is not None:
             info += '_' + description
-            
+
         description = info.replace(' ', '-')
 
         return description
-            
-    def __parse_level(self, interactive_level: str) -> None:
+
+    def __parse_level(self, interactive_level: utils.InteractiveLevel) -> None:
         '''
             Maps interactive_level values to boolean variables.
         '''
         self.save_data = interactive_level != 'user'
         self.display_data = interactive_level in ['user', 'full']
         self.print_progress = interactive_level != 'script'
-        
+
     def __setup_output_dirs(self,
                             output_parent: str,
                             description: str,
@@ -596,29 +594,30 @@ class Redistricting:
             Make sure the output directories exist, if they're needed.
         '''
         output_path = os.path.join(output_parent, description)
-        
+
         if checkpoint_dest[-5:] != '.json':
             checkpoint_dest += '.json'
         checkpoint_path = os.path.join(output_parent, checkpoint_dest)
-        
+
         if not os.path.exists(output_parent):
-            os.makedirs(output_parent, exist_ok=True) # for multiprocessing, need to create directory manually
-        
+            # for multiprocessing, need to create directory manually
+            os.makedirs(output_parent, exist_ok=True)
+
         if self.save_data and self.output_level != "minimal" and not os.path.exists(output_path):
             os.mkdir(output_path)
-            
+
         return output_path, checkpoint_path
-    
+
     def __output_run_data(self,
                           initial_partition: Partition|None,
-                          final_partition: Partition|None) -> dict[str, Any]:
+                          final_partition: Partition|None) -> utils.Metadata:
         '''
             Collect info from the arguments and output this run's data.
         '''
         if self.plot_interval > 0:
             self.__collect_single_updaters(initial_partition, is_final=False)
         self.__collect_single_updaters(final_partition)
-        
+
         run_data = {
             'parameters': self.instance_data['checkpoint']['constructor'],
             'runtime': self.instance_data['runtime']
@@ -643,33 +642,50 @@ class Redistricting:
                 json.dump(run_data, f, indent=4)
             if self.print_progress:
                 print(f'Results saved to {file}')
-        
+
         return run_data
-    
+
+    def __collect_single_updaters(self,
+                                  partition: Partition|None,
+                                  is_final: bool = True) -> None:
+        '''
+            Adds data generated by applying the single updaters to the partition to the
+            instance_data dictionary.
+        '''
+        partition_type = 'last_partition' if is_final else 'first_partition'
+
+        if partition is None:
+            raise utils.RedistrictingException(f"Cannot collect data on None {partition_type}!")
+
+        self.instance_data['runtime'][partition_type] = {
+            name: updater(partition) for name,updater in self.single_updaters.items()
+        }
+
     def __run_the_chain(self) -> tuple[Partition|None, Partition|None]:
         '''
-            Run the main loop of the Markov chain, returning the first and last partitions generated.
+            Run the main loop of the Markov chain, returning the first and last partitions
+            generated.
         '''
         initial_partition = None
         final_partition = None
-        
+
         self.instance_data['runtime']['step_updater_data'] = {
             updater: [] for updater in self.step_updaters.keys() if updater != "population"
         }
-        
+
         for i, partition in enumerate(self.chain):
             if partition is None:
                 raise utils.RedistrictingException(f"None partition at step {i+self.step_offset}!")
-            
+
             self.__try_checkpointing(i + self.step_offset, partition)
-            
+
             if self.print_progress:
                 print(f"\rstep {i+self.step_offset}/{self.steps+self.step_offset}", end='')
-            
+
             if initial_partition is None:
                 initial_partition = partition
             final_partition = partition
-            
+
             if self.output_level != 'minimal' and self.__should_plot_step(i + self.step_offset):
                 utils.draw_graph(
                     is_custom = self.graph_is_custom,
@@ -683,27 +699,27 @@ class Redistricting:
                         self.output_path, f"step_{i + self.step_offset}.png"
                     ) if self.save_data else None
                 )
-            
+
             for updater in self.step_updaters.keys():
                 if updater != "population":
                     self.instance_data['runtime']['step_updater_data'][updater].append(
                         partition[updater]
                     )
-                
+
         return initial_partition, final_partition
-    
+
     def __try_checkpointing(self, i: int, partition: Partition) -> None:
         '''
             Try to make a checkpoint file for this step.
         '''
         steps = self.steps + self.step_offset
-        
+
         if self.__should_checkpoint_step(i, steps):
             self.instance_data['checkpoint']['steps'] = steps - i
             self.instance_data['checkpoint']['assignment'] = dict(partition.assignment)
             with open(self.checkpoint_path, 'w') as f:
                 json.dump(self.instance_data['checkpoint'], f)
-                
+
     def __should_checkpoint_step(self, i: int, steps: int) -> bool:
         '''
             Should the checkpoint file be written to for step i?
@@ -713,7 +729,7 @@ class Redistricting:
             and i not in [0, steps]
             and i % self.checkpoint_interval == 0
         ) or (self.keep_final_step is not None and i == steps)
-    
+
     def __should_plot_step(self, i: int) -> bool:
         '''
             Should a matplotlib plot be generated for step i?
