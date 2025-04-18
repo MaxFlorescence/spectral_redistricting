@@ -1,14 +1,15 @@
-'''Module providing utilities for the Redistricting package.'''
+'''Utilities for the Redistricting package.'''
 
 import os
 from typing import Callable, Any, Literal
 from functools import lru_cache
 
-from gerrychain import Partition
-from gerrychain import Graph
 import networkx as nx
 import numpy as np
 import matplotlib.pyplot as plt
+
+from gerrychain import Partition
+from gerrychain import Graph
 
 # type definitions
 type Node = Any
@@ -53,11 +54,11 @@ def draw_graph(is_custom: bool,
                show_graph: bool,
                file_name: str|None = None) -> None:
     '''
-        If is_custom is True, then draws the partition's graph.
-        Otherwise, draws the given graph using the k, node_size, and node_shape parameters, as well
-        as the partition's assignment.
-        
-        If a filename is given, saves the plot to the file. Otherwise displays it.
+    If is_custom is True, then draws the partition's graph.
+    Otherwise, draws the given graph using the k, node_size, and node_shape parameters, as well
+    as the partition's assignment.
+    
+    If a filename is given, saves the plot to the file. Otherwise displays it.
     '''
     fig = plt.figure(figsize=(19.2, 10.8), dpi=100)
 
@@ -142,8 +143,8 @@ def stripes(nodelist: list[Node],
             k: int,
             mapping: Callable[[Node], float]) -> Assignment:
     '''
-        Returns an assignment that partitions `g.nodes` into `k` stripes based on the nodes'
-        relative order under the `mapping`.
+    Returns an assignment that partitions `g.nodes` into `k` stripes based on the nodes'
+    relative order under the `mapping`.
     '''
     values = np.array([mapping(v) for v in nodelist])
     unique_vals = np.unique(values)

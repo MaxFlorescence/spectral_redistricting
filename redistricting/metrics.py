@@ -1,4 +1,4 @@
-'''Module providing updater methods for collecting partition metrics.'''
+'''Updater methods for collecting partition metrics.'''
 
 from typing import Any
 from functools import lru_cache, partial
