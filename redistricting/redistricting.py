@@ -14,7 +14,7 @@ from gerrychain.proposals import recom, reversible_recom
 from gerrychain.updaters import Tally
 
 from redistricting.proposals import (spectral_kmeans, spectral_recom)
-from redistricting import (metrics, utils)
+from redistricting import (utils, metrics)
 
 class Redistricting:
     '''
@@ -219,6 +219,7 @@ class Redistricting:
         self.total_population, self.target_population = self.__set_populations(population_key)
 
         # population updater is required
+        self.metrics = metrics.Metrics(self.target_size, self.target_population)
         self.step_updaters = self.__init_updaters(step_updaters) | {"population": Tally("pop")}
         self.single_updaters = self.__init_updaters(single_updaters)
 
@@ -349,12 +350,16 @@ class Redistricting:
             Create a dictionary of updater functions if updaters is a list of strings.
         '''
         if isinstance(updaters, list):
-            return {
-                name: metrics.get_updater(name, self.target_size, self.target_population)
-                for name in updaters
-            }
-        else:
-            return updaters
+            updater_dict = {}
+
+            for name in updaters:
+                if name not in metrics.available_updaters:
+                    raise utils.RedistrictingException(f'"{name}" is not a known updater!')
+                updater_dict[name] = getattr(self.metrics, name)
+
+            return updater_dict
+
+        return updaters
 
     def __init_chain(self, proposal: str) -> tuple[Partition, MarkovChain]:
         '''
@@ -373,7 +378,7 @@ class Redistricting:
             proposal = self.__init_proposal(proposal),
             constraints = Validator([] if ignore_constraints else [
                 self.near_target_population,
-                metrics.contiguous
+                self.metrics.contiguous
             ]),
             accept = always_accept,
             initial_state = partition,
