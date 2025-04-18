@@ -179,7 +179,7 @@ class Redistricting:
             single_updaters = []
 
         # store data for checkpointing
-        self.instance_data = {
+        self.instance_data: utils.Metadata = {
             'checkpoint': {
                 'constructor': {
                     'k': k,
